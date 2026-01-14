@@ -115,6 +115,12 @@ class Step1Model(nn.Module):
         # alignment bases B_k: [Kr, da, d]
         self.B_basis = nn.Parameter(torch.randn(cfg.Kr, cfg.da, cfg.d) * 0.02)
 
+        # one-shot cross-view attention (used when gate=True)
+        self.attn_q = nn.Linear(cfg.da, cfg.da, bias=False)
+        self.attn_k = nn.Linear(cfg.da, cfg.da, bias=False)
+        self.attn_v = nn.Linear(cfg.da, cfg.da, bias=False)
+        self.attn_o = nn.Linear(cfg.da, cfg.da, bias=False)
+
     # ---- A1/A2: engineering-friendly Agg_v (accept already-windowized) ----
     def agg_windows(self, E_v: Any, T: int, d_in_v: int, device: Optional[torch.device]) -> Tensor:
         """
@@ -158,9 +164,17 @@ class Step1Model(nn.Module):
         mass = x_win_v.abs().sum(dim=1)
         empty = (mass <= eps).float()
         q_cov = 1.0 - empty.mean()
-        q_val = torch.tensor(1.0, device=x_win_v.device)
-        q_cmp = torch.tensor(1.0, device=x_win_v.device)
-        q_unq = torch.tensor(1.0, device=x_win_v.device)
+        finite = torch.isfinite(x_win_v)
+        # q_val: 窗口级有效率（窗口内所有维度均为 finite 视为 parse success）
+        q_val = finite.all(dim=1).float().mean()
+        # q_cmp: 字段完整度（finite entries 占比；若你后续在对齐阶段输出缺失统计，可在此替换为“1-缺失率”）
+        q_cmp = finite.float().mean()
+        # q_unq: 唯一性（窗口向量去重占比；对计数类特征有效）
+        try:
+            uniq = torch.unique(x_win_v, dim=0).shape[0]
+            q_unq = torch.tensor(float(uniq) / float(max(T, 1)), device=x_win_v.device)
+        except Exception:
+            q_unq = torch.tensor(1.0, device=x_win_v.device)
         mean_m = mass.mean()
         std_m = mass.std(unbiased=False)
         cv = std_m / (mean_m + eps)
@@ -174,15 +188,19 @@ class Step1Model(nn.Module):
         """
         q_vec = torch.stack([q_cov, q_val, q_cmp, q_unq, q_stb], dim=1)  # [V,5]
         Q = self.q_head(q_vec).squeeze(1)  # [V]
-        alpha = F.softmax(Q, dim=0)
+        tau_q = max(float(getattr(self.cfg, "tau_q", 1.0)), 1e-6)
+        alpha = F.softmax(Q / tau_q, dim=0)
         return Q, alpha
 
     # ---- A4: routing pi ----
-    def compute_pi(self, g_view: Tensor) -> Tensor:
+    def compute_pi(self, g_view: Tensor, alpha: Tensor) -> Tensor:
         """
-        g_view: [V,d] -> pi: [Kr]
+        方法定稿：路由输入需注入视图可靠性 alpha。
+        这里采用工程稳定实现：g_view 按 alpha 加权后再喂给 router。
+        g_view: [V,d], alpha:[V] -> pi:[Kr]
         """
-        g_all = g_view.reshape(1, -1)  # [1,V*d]
+        g_weighted = g_view * alpha.view(self.cfg.V, 1)
+        g_all = g_weighted.reshape(1, -1)  # [1,V*d]
         logits = self.router(g_all).squeeze(0)  # [Kr]
         return F.softmax(logits, dim=0)
 
@@ -203,22 +221,38 @@ class Step1Model(nn.Module):
         gate = (rho >= float(theta))
         return corr, rho, gate
 
+    def cross_view_attention(self, h_aligned: Tensor) -> Tensor:
+        """
+        方法定稿：门控开启时进行一次性交互注意力（跨视图互补注入）。
+        h_aligned: [V,T,da] -> h_enhanced: [V,T,da]
+        """
+        # [T,V,da]
+        x = h_aligned.permute(1, 0, 2).contiguous()
+        Q = self.attn_q(x)
+        K = self.attn_k(x)
+        Vv = self.attn_v(x)
+        scale = (float(self.cfg.da) ** 0.5) if self.cfg.da > 0 else 1.0
+        scores = torch.matmul(Q, K.transpose(1, 2)) / max(scale, 1e-6)  # [T,V,V]
+        w = F.softmax(scores, dim=-1)
+        out = torch.matmul(w, Vv)  # [T,V,da]
+        out = self.attn_o(out)
+        y = x + out  # residual
+        return y.permute(1, 0, 2).contiguous()
+
     def fuse(self, h_aligned: Tensor, alpha: Tensor, gate: bool) -> Tuple[Tensor, Tensor]:
         """
+        方法定稿融合策略：
+        - gate=False：仍按可靠性 alpha 做加权融合（不再硬选单视图）
+        - gate=True ：先做一次性交互注意力增强，再按 alpha 融合
         h_aligned: [V,T,da]
         returns Z:[da], H:[T,da]
         """
         if self.cfg.V == 1:
             H = h_aligned[0]
         else:
-            if gate:
-                # weighted fusion
-                w = alpha.view(self.cfg.V, 1, 1)
-                H = (w * h_aligned).sum(dim=0)  # [T,da]
-            else:
-                # distrust cross-view: pick best view
-                v_star = int(torch.argmax(alpha).detach().cpu().item())
-                H = h_aligned[v_star]  # [T,da]
+            h_use = self.cross_view_attention(h_aligned) if gate else h_aligned
+            w = alpha.view(self.cfg.V, 1, 1)
+            H = (w * h_use).sum(dim=0)  # [T,da]
         Z = H.mean(dim=0)  # [da]
         return Z, H
 
@@ -264,12 +298,13 @@ class Step1Model(nn.Module):
         Q, alpha = self.compute_alpha(q_cov_t, q_val_t, q_cmp_t, q_unq_t, q_stb_t)  # [V],[V]
 
         # A4 routing + alignment
-        pi = self.compute_pi(g_view)      # [Kr]
+        pi = self.compute_pi(g_view, alpha)      # [Kr]
         B_x = self.compute_Bx(pi)         # [da,d]
         h_aligned = self.align(h_raw, B_x)  # [V,T,da]
 
         # A6 corr/rho/gate + fusion
-        corr_mat, rho, gate = self.corr_rho_gate(g_view, self.cfg.theta)
+        g_aligned_view = h_aligned.mean(dim=1)  # [V,da]
+        corr_mat, rho, gate = self.corr_rho_gate(g_aligned_view, self.cfg.theta)
         Z, H = self.fuse(h_aligned, alpha, gate)
 
         metrics = Step1Metrics(
@@ -279,7 +314,7 @@ class Step1Model(nn.Module):
             q_unq=q_unq_t.detach(),
             q_stb=q_stb_t.detach(),
             Q=Q.detach(),
-            g_view=g_view.detach(),
+            g_view=g_aligned_view.detach(),
             corr_mat=corr_mat.detach(),
         )
 

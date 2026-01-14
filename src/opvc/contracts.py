@@ -116,11 +116,6 @@ class Step3Outputs:
 # NOTE: keep fields consistent with step2.py / step3.py usage.
 @dataclass
 class Step2Config:
-    theta_global: float = 0.5
-    forward_uras: bool = True
-    nu: Optional[float] = None
-    risk: Optional[float] = None
-    tau_dyn: Optional[int] = None
 
     Kr: int = 4
     du: int = 8
