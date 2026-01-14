@@ -23,7 +23,6 @@ def main():
     out1 = d.get("out1", d)
 
     H = _to(out1["H"], device=device)              # [T, da]
-    Z = _to(out1["Z"], device=device).view(1, -1)  # [1, da]
     T, dz = H.shape
 
     pi1 = _to(out1["pi"], device=device).view(-1)  # [Kr]
@@ -36,12 +35,7 @@ def main():
 
     cfg = Step2Config()
     _safe_set(cfg, "Kr", Kr)
-    _safe_set(cfg, "dz", dz)
-    # 如果 cfg 里 dh 是 None，给个默认
-    if hasattr(cfg, "dh") and getattr(cfg, "dh") in (None, 0):
-        setattr(cfg, "dh", 16)
-
-    # 训练证明超参（你后面可调大）
+    # 训练证明超参（你需要更强再调大）
     _safe_set(cfg, "teacher_epochs", 3)
     _safe_set(cfg, "teacher_lr", 1e-3)
     _safe_set(cfg, "rounds", 2)
@@ -51,32 +45,31 @@ def main():
     _safe_set(cfg, "dp_clip", 1.0)
     _safe_set(cfg, "dp_noise", 0.05)
 
-    print(f"[cfg] Kr={Kr} dz={dz} dh={getattr(cfg,'dh',None)} dp_clip={getattr(cfg,'dp_clip',None)} dp_noise={getattr(cfg,'dp_noise',None)}")
+    print(f"[cfg] Kr={Kr} dz={dz} dp_clip={getattr(cfg,'dp_clip',None)} dp_noise={getattr(cfg,'dp_noise',None)}")
 
     train_batches = [{
-        "Z": H,    # 用窗口序列 H 当训练样本（比只用单个 Z 更稳定）
+        "Z": H,
         "pi": pi,
         "alpha": alpha,
         "rho": rho,
         "gate": gate,
     }]
 
-    theta_global, logs = train_theta_global_align_final(cfg, dz=dz, train_batches=train_batches, device=device, seed=0)
+    theta_pkg, logs = train_theta_global_align_final(cfg, dz=dz, train_batches=train_batches, device=device, seed=0)
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     out_pt = ART / f"step2_theta_global_trained_align_final_{ts}.pt"
     out_log = ART / f"step2_train_log_align_final_{ts}.json"
 
-    torch.save(theta_global, out_pt)
+    torch.save(theta_pkg, out_pt)
     out_log.write_text(json.dumps(logs, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # 更新 canonical（给 step123 默认读取）
     canonical = ART / "step2_theta_global_trained.pt"
     if canonical.exists():
         bak = ART / f"step2_theta_global_trained.pt.bak_{ts}"
         canonical.replace(bak)
         print(f"[OK] backup old canonical -> {bak}")
-    torch.save(theta_global, canonical)
+    torch.save(theta_pkg, canonical)
 
     print(f"[OK] wrote {out_pt}")
     print(f"[OK] wrote {out_log}")

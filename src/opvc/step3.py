@@ -59,7 +59,16 @@ def _build_step2_student(cfg3: Step3Config, theta_global: Dict[str, Any], device
     # inference: no noise
     cfg2 = Step2Config(Kr=cfg3.Kr, du=cfg3.du, Cb=1.0, sigma_b=0.0)
     m2 = Step2Model(cfg2, dz=cfg3.da).to(device).eval()
-    m2.load_state_dict({k: v for k, v in theta_global.items()}, strict=True)
+        # theta_global can be packaged: {state_dict: <Step2Model weights>, mu/cov_inv/...}
+    if isinstance(theta_global, dict) and 'state_dict' in theta_global:
+        sd = theta_global['state_dict']
+    else:
+        sd = theta_global
+    if (not isinstance(sd, dict)) or (not any(str(k).startswith(('student.','heads.')) for k in sd.keys())):
+        raise ValueError("theta_global does not contain Step2Model weights (expected keys like student.* / heads.*). "
+                         "Re-run scripts/run_step2_train_from_step1_out.py to regenerate a packaged theta_global with 'state_dict'.")
+    m2.load_state_dict(sd, strict=True)
+
     return m2
 
 
