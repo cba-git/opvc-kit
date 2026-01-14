@@ -35,3 +35,8 @@ datasets/
 runs/
 outputs/
 logs/
+
+# ---- OPVC local patch backups (do not commit) ----
+*.bak
+*.bak_*
+tmp_*.py

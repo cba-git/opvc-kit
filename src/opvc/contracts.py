@@ -84,23 +84,10 @@ class Step1Outputs:
 
 
 @dataclass
-class Step2Config:
-    Kr: int
-    du: int
-    Cb: float = 1.0
-    sigma_b: float = 0.5
 
 
 @dataclass
-class Step2Outputs:
-    theta_global: Dict[str, Any]
-    forward_uras: Callable[..., Tensor]
-    nu: Optional[Tensor] = None
-    risk: Optional[Tensor] = None
-    tau_dyn: Optional[Tensor] = None
 
-
-@dataclass
 class Step3Config:
     V: int
     T: int
@@ -124,3 +111,26 @@ class Step3Outputs:
     e_score: Optional[Tensor] = None
     E_view: Optional[Tensor] = None
     r_view: Optional[Tensor] = None
+
+# ---- Step2 Contract (canonical; single source of truth) ----
+# NOTE: keep fields consistent with step2.py / step3.py usage.
+@dataclass
+class Step2Config:
+    theta_global: float = 0.5
+    forward_uras: bool = True
+    nu: Optional[float] = None
+    risk: Optional[float] = None
+    tau_dyn: Optional[int] = None
+
+    Kr: int = 4
+    du: int = 8
+    Cb: float = 1.0
+    sigma_b: float = 0.5
+
+@dataclass
+class Step2Outputs:
+    theta_global: Dict[str, Any]
+    forward_uras: Callable
+    nu: Optional[float] = None
+    risk: Optional[float] = None
+    tau_dyn: Optional[int] = None

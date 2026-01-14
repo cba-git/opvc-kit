@@ -52,9 +52,9 @@ def main():
 
     # Extract H/pi/alpha from Step1 outputs (support both dict and attribute styles)
     out1d = out1.__dict__
-    H = torch.tensor(out1d.get("H"), dtype=torch.float32)          # [T,da]
-    pi = torch.tensor(out1d.get("pi"), dtype=torch.float32)        # [Kr]
-    alpha = torch.tensor(out1d.get("alpha"), dtype=torch.float32)  # [V]
+    H = torch.as_tensor(out1d.get("H"), dtype=torch.float32)          # [T,da]
+    pi = torch.as_tensor(out1d.get("pi"), dtype=torch.float32)        # [Kr]
+    alpha = torch.as_tensor(out1d.get("alpha"), dtype=torch.float32)  # [V]
 
     theta_global = torch.load(TH, map_location="cpu")
 
