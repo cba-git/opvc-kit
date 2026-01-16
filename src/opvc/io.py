@@ -44,7 +44,6 @@ def step1_outputs_from_dict(d: Dict[str, Any], device: str = "cpu") -> Step1Outp
         q_unq=torch.as_tensor(metrics_d.get("q_unq"), dtype=torch.float32, device=dev) if metrics_d.get("q_unq") is not None else None,
         q_stb=torch.as_tensor(metrics_d.get("q_stb"), dtype=torch.float32, device=dev) if metrics_d.get("q_stb") is not None else None,
         Q=torch.as_tensor(metrics_d.get("Q"), dtype=torch.float32, device=dev) if metrics_d.get("Q") is not None else None,
-        Q_hat=torch.as_tensor(metrics_d.get("Q_hat"), dtype=torch.float32, device=dev) if metrics_d.get("Q_hat") is not None else None,
         g_view=torch.as_tensor(metrics_d.get("g_view"), dtype=torch.float32, device=dev) if metrics_d.get("g_view") is not None else None,
         corr_mat=torch.as_tensor(metrics_d.get("corr_mat"), dtype=torch.float32, device=dev) if metrics_d.get("corr_mat") is not None else None,
     )

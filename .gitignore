@@ -40,3 +40,6 @@ logs/
 *.bak
 *.bak_*
 tmp_*.py
+
+# local artifacts
+artifacts/
