@@ -1,0 +1,42 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data / large artifacts (DO NOT COMMIT)
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.pkl
+*.npy
+*.npz
+data/
+datasets/
+runs/
+outputs/
+logs/
+
+# ---- OPVC local patch backups (do not commit) ----
+*.bak
+*.bak_*
+tmp_*.py
