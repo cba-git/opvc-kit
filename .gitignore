@@ -39,3 +39,18 @@ __pycache__/
 
 # local/debug artifacts
 artifacts/
+
+# ===== opvc local/runtime artifacts =====
+artifacts/
+outputs/
+runs/
+*.pt
+*.pth
+*.ckpt
+*.log
+*.log.json
+*.summary.json
+__pycache__/
+*.pyc
+*.pyo
+configs/_trash/
