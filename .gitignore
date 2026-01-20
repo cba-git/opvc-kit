@@ -23,3 +23,16 @@ configs/pipelines/*_local.json
 # misc
 tmp/
 .cache/
+
+# local machine configs (do not commit)
+configs/datasets/*_local.json
+configs/pipelines/*_local.json
+
+# model weights / torch artifacts (do not commit)
+*.pt
+*.pth
+
+# caches
+__pycache__/
+*.pyc
+*.pyo
