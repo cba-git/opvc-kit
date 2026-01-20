@@ -36,3 +36,6 @@ configs/pipelines/*_local.json
 __pycache__/
 *.pyc
 *.pyo
+
+# local/debug artifacts
+artifacts/
