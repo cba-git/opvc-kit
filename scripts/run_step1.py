@@ -3,6 +3,45 @@ from __future__ import annotations
 
 import argparse, json
 from pathlib import Path
+import re
+
+# ---- host inference helpers (auto-added) ----
+_IPV4_RE = re.compile(r"\b(?:(?:\d{1,3}\.){3}\d{1,3})\b")
+
+def _infer_host_from_E(E):
+    # E can be list of edges; each edge may be list/tuple/dict/str
+    # We scan string tokens and pick the most frequent IPv4.
+    if not E:
+        return "local"
+    c = {}
+    def add_ip(s):
+        for ip in _IPV4_RE.findall(s):
+            c[ip] = c.get(ip, 0) + 1
+    def walk(x):
+        if x is None:
+            return
+        if isinstance(x, str):
+            add_ip(x)
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+    walk(E)
+    if not c:
+        return "local"
+    return max(c.items(), key=lambda kv: kv[1])[0]
+
+def _ensure_host(meta, E):
+    # keep existing meta; only fill meta["host"] if missing
+    if not isinstance(meta, dict):
+        meta = {}
+    if "host" not in meta or meta.get("host") in (None, ""):
+        meta = dict(meta)
+        meta["host"] = _infer_host_from_E(E)
+    return meta
+# ---- end helpers ----
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -10,6 +49,54 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import torch
 from opvc.contracts import Step1Config
 from opvc.step1 import Step1Model
+
+
+# --- host inference helpers (auto-added) ---
+import re as _re
+_IPV4_RE = _re.compile(r"\b(?:(?:\d{1,3}\.){3}\d{1,3})\b")
+
+def _iter_edge_strings(_e):
+    # E can be list/tuple (mixed) or dict or str
+    if _e is None:
+        return
+    if isinstance(_e, str):
+        yield _e
+        return
+    if isinstance(_e, (list, tuple)):
+        for x in _e:
+            if isinstance(x, str):
+                yield x
+            elif isinstance(x, dict):
+                for _, v in x.items():
+                    if isinstance(v, str):
+                        yield v
+            elif isinstance(x, (list, tuple)):
+                # nested
+                for y in x:
+                    if isinstance(y, str):
+                        yield y
+                    elif isinstance(y, dict):
+                        for _, v in y.items():
+                            if isinstance(v, str):
+                                yield v
+    elif isinstance(_e, dict):
+        for _, v in _e.items():
+            if isinstance(v, str):
+                yield v
+
+def _infer_host_from_E(E):
+    # pick most frequent IPv4 in edge strings; fallback "local"
+    if not E:
+        return "local"
+    cnt = {}
+    for s in _iter_edge_strings(E):
+        for ip in _IPV4_RE.findall(s):
+            cnt[ip] = cnt.get(ip, 0) + 1
+    if not cnt:
+        return "local"
+    return max(cnt.items(), key=lambda kv: kv[1])[0]
+# --- end host inference helpers ---
+
 
 def to_py(x):
     if isinstance(x, torch.Tensor):
@@ -69,7 +156,7 @@ def main():
                 out = model(E, t0=t0, delta=delta)
 
             rec = {
-                "meta": obj.get("meta", {}),
+                "meta": _ensure_host(obj.get("meta", {}), obj.get("E", None)),
                 "t0": t0,
                 "delta": delta,
                 "T": T,
@@ -104,6 +191,15 @@ def main():
                     },
                 },
             }
+            # guarantee meta.host (from input meta.host or inferred from E)
+            try:
+                _m = rec.get('meta') or {}
+                _inm = (obj.get('meta') or {}) if isinstance(obj, dict) else {}
+                if not _m.get('host'):
+                    _m['host'] = _inm.get('host') or _infer_host_from_E(obj.get('E') if isinstance(obj, dict) else None)
+                rec['meta'] = _m
+            except Exception:
+                pass
             fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n += 1
 

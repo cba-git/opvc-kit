@@ -37,7 +37,13 @@ def main():
                 continue
             obj = json.loads(line)
             s1d = obj.get("step1", obj.get("step1_out", obj))
-            outs.append(step1_outputs_from_dict(s1d, device=args.device))
+            s1 = step1_outputs_from_dict(s1d, device=args.device)
+            # [AUTO] preserve meta (e.g., meta.host) from step1.jsonl record
+            try:
+                setattr(s1, "meta", obj.get("meta", {}) or {})
+            except Exception:
+                pass
+            outs.append(s1)
 
     if not outs:
         raise SystemExit("[ERR] empty step1_jsonl")

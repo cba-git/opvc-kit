@@ -54,3 +54,11 @@ __pycache__/
 *.pyc
 *.pyo
 configs/_trash/
+
+# ---- local runs / artifacts ----
+runs/
+opvc-lab/
+*.pt
+*.jsonl
+*.log.json
+*.bak_*

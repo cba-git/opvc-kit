@@ -401,13 +401,19 @@ def train_step2_federated(
     proj_memory: Optional[List[Dict[str, Tensor]]] = None
 
     N = len(step1_outs)
-    shards = _split_indices(N, num_clients=cfg.num_clients, seed=seed)
+    shards = _split_by_host(step1_outs, num_clients=cfg.num_clients, seed=seed, host_path="meta.host")
 
     for r in range(int(cfg.rounds)):
         client_deltas: List[Dict[str, Tensor]] = []
         round_logs: List[Dict[str, float]] = []
 
         for cid, idx in enumerate(shards):
+
+            # [AUTO] _split_by_host returns List[List[int]]; normalize idx to torch.Tensor
+
+            if not torch.is_tensor(idx):
+
+                idx = torch.tensor(idx, device=dev, dtype=torch.long)
             if idx.numel() == 0:
                 continue
             # local copy
@@ -620,3 +626,42 @@ def build_step2_outputs(theta_pkg: Dict[str, Any], device: str = "cpu") -> Step2
         return student.forward_uras(Z.to(device), pi.to(device))
 
     return Step2Outputs(theta_global=sd, forward_uras=_forward_uras)
+
+
+def _get_by_path(o, path: str):
+    """Get value from Step1Outputs/dict by dotted path like 'meta.src'."""
+    parts = path.split(".")
+    cur = o
+    for part in parts:
+        if hasattr(cur, part):
+            cur = getattr(cur, part)
+        elif isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _split_by_host(step1_outs, num_clients: int, seed: int, host_path: str):
+    """Non-IID split: assign all records of the same host into the same client."""
+    import random
+    rng = random.Random(seed)
+
+    host2idx = {}
+    for i, o in enumerate(step1_outs):
+        v = _get_by_path(o, host_path)
+        if v in (None, ""):
+            raise ValueError(f"Missing host at path '{host_path}' for record index={i}. "
+                             f"Your step1.jsonl must contain this field.")
+        host2idx.setdefault(str(v), []).append(i)
+
+    hosts = list(host2idx.keys())
+    rng.shuffle(hosts)
+
+    shards = [[] for _ in range(num_clients)]
+    for j, h in enumerate(hosts):
+        shards[j % num_clients].extend(host2idx[h])
+
+    for s in shards:
+        rng.shuffle(s)
+    return shards
