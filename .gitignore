@@ -28,3 +28,12 @@ opvc-lab/
 configs/datasets/*_local*.json
 configs/pipelines/*_local*.json
 configs/_trash/
+
+# --- local build artifacts ---
+src/*.egg-info/
+**/*.egg-info/
+*.egg-info/
+
+# --- local backups ---
+*.bak
+*.bak.*
