@@ -33,5 +33,9 @@ class DatasetAdapter:
         T: int,
         t0: Optional[float] = None,
         max_rows: Optional[int] = None,
+        segment_by_host: bool = True,
+        segment_mode: str = "per_host",
+        max_records: Optional[int] = None,
+        max_segments_per_host: Optional[int] = None,
     ):
         raise NotImplementedError

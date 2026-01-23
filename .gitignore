@@ -1,64 +1,30 @@
-# python cache
+# ---- Python ----
 __pycache__/
 *.py[cod]
-*.pyd
 
-# local env / editor
+# ---- Environments / editors ----
 .venv/
 .env
 .vscode/
 .idea/
+
+# ---- OS ----
 .DS_Store
 
-# runtime outputs (do not commit)
+# ---- Runtime outputs (do not commit) ----
 outputs/
 runs/
-*.log
-*.log.json
-
-# local-only dataset/pipeline configs (absolute paths allowed here)
-configs/datasets/*_local.json
-configs/pipelines/*_local.json
-
-# misc
+artifacts/
 tmp/
 .cache/
+opvc-lab/
 
-# local machine configs (do not commit)
-configs/datasets/*_local.json
-configs/pipelines/*_local.json
-
-# model weights / torch artifacts (do not commit)
-*.pt
-*.pth
-
-# caches
-__pycache__/
-*.pyc
-*.pyo
-
-# local/debug artifacts
-artifacts/
-
-# ===== opvc local/runtime artifacts =====
-artifacts/
-outputs/
-runs/
+# ---- Model weights / checkpoints ----
 *.pt
 *.pth
 *.ckpt
-*.log
-*.log.json
-*.summary.json
-__pycache__/
-*.pyc
-*.pyo
-configs/_trash/
 
-# ---- local runs / artifacts ----
-runs/
-opvc-lab/
-*.pt
-*.jsonl
-*.log.json
-*.bak_*
+# ---- Local-only configs (often contain absolute paths) ----
+configs/datasets/*_local*.json
+configs/pipelines/*_local*.json
+configs/_trash/

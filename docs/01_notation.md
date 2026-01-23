@@ -2,6 +2,7 @@
 
 > 目标：同一符号=同一含义；同一含义=同一字段名。  
 > 约定：**窗口序号用 τ（tau）**；**门控阈值用 θ（theta）**；**样本自适应阈值仍用 τ(x)**（带自变量，含义不同且不冲突）。
+> 补充：攻击标签维度用 $K_a$（代码 `Ka`）。**默认 `Ka=1` 表示二分类（attack vs benign）**；`Ka>1` 表示多标签攻击类型。
 
 ## 0) 索引/集合/基础量
 
@@ -16,6 +17,7 @@
 | $\Delta$ | 窗宽（window size） | `delta` | float/int | 秒/毫秒 |
 | $\tau\in\{1,\dots,T\}$ | **窗口序号**（window index） | `tau` / `win_idx` | int | 避免与阈值冲突 |
 | $T$ | 总窗口数 | `T` | int | 大写 T 作为总窗数保留 |
+| $K_a$ | 攻击类别/标签维度（默认二分类） | `Ka` | int | `Ka=1` 为二分类；`Ka>1` 为多标签 |
 
 ## 1) 输入数据（多视图事件）
 
@@ -63,7 +65,7 @@
 | $z_s,z_c$ | 风格/内容表征 | `z_style,z_content` | `[d_s]` |
 | $p_{det}(x)$ | 检测概率 | `p_det` | float |
 | $\tau(x)$ | 样本自适应检测阈值 | `tau_x` | float |
-| $y(x)$ | 多标签预测 | `y_hat` | `[K_a]` |
+| $y(x)$ | 识别输出（默认二分类；可选多标签） | `y_hat` | `[K_a]` | `Ka=1` 时 `y_hat[0]≈P(attack)`；`Ka>1` 为每类概率 |
 | $I_v(x)$ | 视图可疑指示 | `I_view[v]` | bool |
 | $J_v(x)$ | 可疑窗口区间集合 | `J_view[v]` | list[(start,end)] |
 | flagunk(x) | 检测为真但无视图命中 | `flag_unknown` | bool |

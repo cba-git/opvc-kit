@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 from .contracts import Step2Config, Step2Outputs, Step1Outputs
 from .running_stats import RunningMeanStd
+from .dp_accountant import GaussianDPReport, advanced_compose_eps, gaussian_mechanism_eps
 from .step2_losses import (
     alpha_confidence,
     asd_loss,
@@ -276,6 +277,114 @@ def pretrain_teacher_supervised(
     return log
 
 
+def pretrain_teacher_selfsup(
+    teacher: Step2Teacher,
+    loader: Iterable,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+    tau: float = 0.2,
+    aug_noise_std: float = 0.01,
+    aug_dropout: float = 0.1,
+    lambda_ssl: float = 1.0,
+    lambda_sup: float = 0.0,
+) -> Dict[str, float]:
+    """Self-supervised (contrastive) teacher pretraining on behavior features b(x).
+
+    This is intentionally lightweight:
+      - two stochastic augmentations of b (feature dropout + gaussian noise)
+      - symmetric InfoNCE between the two embedding views
+      - optional supervised BCE loss when (b,y) is provided and teacher.cls_head exists
+
+    Args:
+        teacher: Step2Teacher
+        loader: iterable yielding either (b,) or (b,y)
+        epochs: number of epochs
+        lr: Adam learning rate
+        tau: InfoNCE temperature
+        aug_noise_std: std for additive Gaussian noise
+        aug_dropout: probability to drop (zero) individual features
+        lambda_ssl: weight for self-supervised loss
+        lambda_sup: weight for supervised BCE loss (0 disables)
+    """
+    teacher.train()
+    opt = torch.optim.Adam(teacher.parameters(), lr=float(lr))
+    log: Dict[str, float] = {}
+
+    def _augment(b: Tensor) -> Tensor:
+        x = b
+        if aug_dropout and float(aug_dropout) > 0:
+            keep = (torch.rand_like(x) > float(aug_dropout)).to(x.dtype)
+            x = x * keep
+        if aug_noise_std and float(aug_noise_std) > 0:
+            x = x + torch.randn_like(x) * float(aug_noise_std)
+        return x
+
+    for ep in range(int(epochs)):
+        ssl_losses: List[float] = []
+        sup_losses: List[float] = []
+        tot_losses: List[float] = []
+
+        for batch in loader:
+            # Accept (b,) or (b,y)
+            y = None
+            if isinstance(batch, (tuple, list)):
+                if len(batch) == 1:
+                    b = batch[0]
+                elif len(batch) >= 2:
+                    b, y = batch[0], batch[1]
+                else:
+                    continue
+            else:
+                b = batch
+
+            b = b.to(device=device, dtype=torch.float32)
+            if b.ndim == 1:
+                b = b.view(1, -1)
+
+            # contrastive: z1 vs z2
+            z1, _ = teacher.forward(_augment(b))
+            z2, _ = teacher.forward(_augment(b))
+            z1 = F.normalize(z1, dim=-1)
+            z2 = F.normalize(z2, dim=-1)
+
+            B = int(z1.shape[0])
+            if B <= 1:
+                # Not enough negatives; skip SSL for this batch.
+                loss_ssl = torch.zeros((), device=device)
+            else:
+                logits = (z1 @ z2.t()) / max(float(tau), 1e-6)
+                labels = torch.arange(B, device=logits.device)
+                loss_ssl = 0.5 * (F.cross_entropy(logits, labels) + F.cross_entropy(logits.t(), labels))
+
+            # optional supervised head on *clean* b
+            loss_sup = torch.zeros((), device=device)
+            if y is not None and teacher.cls_head is not None and (lambda_sup and float(lambda_sup) > 0):
+                y = y.to(device=device, dtype=torch.float32)
+                if y.ndim == 1:
+                    y = y.view(-1, 1)
+                _, logits_y = teacher.forward(b)
+                assert logits_y is not None
+                loss_sup = F.binary_cross_entropy_with_logits(logits_y, y)
+
+            loss = float(lambda_ssl) * loss_ssl + float(lambda_sup) * loss_sup
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+            tot_losses.append(float(loss.detach().cpu().item()))
+            ssl_losses.append(float(loss_ssl.detach().cpu().item()))
+            sup_losses.append(float(loss_sup.detach().cpu().item()))
+
+        log[f"teacher_ssl_epoch_{ep}_loss"] = float(sum(tot_losses) / max(len(tot_losses), 1))
+        log[f"teacher_ssl_epoch_{ep}_ssl"] = float(sum(ssl_losses) / max(len(ssl_losses), 1))
+        log[f"teacher_ssl_epoch_{ep}_sup"] = float(sum(sup_losses) / max(len(sup_losses), 1))
+
+    teacher.eval()
+    return log
+
+
 def _split_indices(N: int, num_clients: int, seed: int) -> List[Tensor]:
     g = torch.Generator()
     g.manual_seed(int(seed))
@@ -348,9 +457,17 @@ def train_step2_federated(
     cfg: Step2Config,
     step1_outs: Sequence[Step1Outputs],
     sensitivity_coeff: Optional[Sequence[float]] = None,
-    offline_teacher_loader: Optional[Iterable[Tuple[Tensor, Tensor]]] = None,
+    offline_teacher_loader: Optional[Iterable] = None,
     teacher_epochs: int = 0,
     teacher_lr: float = 1e-3,
+    teacher_selfsup_epochs: int = 0,
+    teacher_selfsup_lr: float = 1e-3,
+    teacher_selfsup_tau: float = 0.2,
+    teacher_selfsup_noise_std: float = 0.01,
+    teacher_selfsup_dropout: float = 0.1,
+    teacher_selfsup_lambda: float = 1.0,
+    teacher_selfsup_sup_lambda: float = 0.0,
+    dp_delta: float = 1e-5,
     seed: int = 0,
     device: str = "cpu",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -358,6 +475,7 @@ def train_step2_federated(
 
     Returns:
         theta_pkg: dict suitable for torch.save (contains cfg/state_dict/teacher/proj_memory stats)
+        ... plus a conservative DP accounting report (eps,delta) for reproducibility.
         logs: training logs
     """
 
@@ -383,7 +501,22 @@ def train_step2_federated(
 
     logs: Dict[str, Any] = {"cfg": asdict(cfg), "db": db, "da": da, "V": V}
 
-    # optional supervised teacher pretrain
+    # optional self-supervised teacher pretrain (can run with or without labels)
+    if offline_teacher_loader is not None and int(teacher_selfsup_epochs) > 0:
+        logs["teacher_pretrain_selfsup"] = pretrain_teacher_selfsup(
+            teacher=teacher,
+            loader=offline_teacher_loader,
+            epochs=int(teacher_selfsup_epochs),
+            lr=float(teacher_selfsup_lr),
+            device=dev,
+            tau=float(teacher_selfsup_tau),
+            aug_noise_std=float(teacher_selfsup_noise_std),
+            aug_dropout=float(teacher_selfsup_dropout),
+            lambda_ssl=float(teacher_selfsup_lambda),
+            lambda_sup=float(teacher_selfsup_sup_lambda),
+        )
+
+    # optional supervised teacher pretrain on D_T = {(b,y)}
     if offline_teacher_loader is not None and teacher_epochs > 0 and (cfg.Ka and cfg.Ka > 0):
         logs["teacher_pretrain"] = pretrain_teacher_supervised(
             teacher=teacher,
@@ -396,6 +529,8 @@ def train_step2_federated(
     # running client baselines for util/risk (used by ATC later)
     rms_util = RunningMeanStd(dim=1, momentum=0.9).to(dev)
     rms_risk = RunningMeanStd(dim=1, momentum=0.9).to(dev)
+    rms_u_pi = RunningMeanStd(dim=1, momentum=0.9).to(dev)
+    rms_c_alpha = RunningMeanStd(dim=1, momentum=0.9).to(dev)
 
     # redundancy memory
     proj_memory: Optional[List[Dict[str, Tensor]]] = None
@@ -425,8 +560,9 @@ def train_step2_federated(
             opt = torch.optim.Adam(student.parameters(), lr=float(cfg.lr))
             # client-local stats
             alphas = torch.stack([step1_outs[int(i)].alpha.to(dev) for i in idx.tolist()], dim=0)  # [B,V]
-            g_view = torch.stack([step1_outs[int(i)].metrics.g_view.to(dev) if step1_outs[int(i)].metrics.g_view is not None else torch.zeros(V, da, device=dev) for i in idx.tolist()], dim=0)
-            # g_view: [B,V,d]
+            # use aligned per-view vectors for redundancy projection (shape [B,V,da])
+            g_view = torch.stack([step1_outs[int(i)].h_aligned.to(dev).mean(dim=1) for i in idx.tolist()], dim=0)
+            # g_view: [B,V,da]
             g_bar = torch.einsum("bv,bvd->vd", alphas, g_view) / float(max(alphas.shape[0], 1))
 
             # importance i_v
@@ -436,6 +572,11 @@ def train_step2_federated(
             # adaptive clip/noise (view-wise) - will refine with util/risk below
             clip_v = (cfg.clip_min + (cfg.clip_max - cfg.clip_min) * imp).detach()
             sigma_v = torch.full((V,), float(cfg.sigma_b0), device=dev)
+
+            # client-level statistics for DP noise on the FINAL update (paper setting)
+            u_v_sum = torch.zeros((V,), device=dev)
+            r_v_sum = torch.zeros((V,), device=dev)
+            n_steps = 0
 
             # local training
             losses = []
@@ -464,11 +605,18 @@ def train_step2_federated(
 
                     # signals
                     conf = alpha_confidence(s1.alpha.to(dev)).view(1)
+                    u_pi = pi_uncertainty(s1.pi.to(dev)).view(1)
                     dist_err = torch.linalg.vector_norm(U_s - U_t, dim=-1)  # [1]
                     util = utility_signal(dist_err, conf)
                     mi_est = mi_risk_estimate_from_logits(cls_logits) if cls_logits is not None else torch.zeros_like(util)
                     sens = (s_v * s1.alpha.to(dev).view(1, -1)).sum(dim=1)
                     risk = risk_signal(sens, mi_est)
+
+                    # update global running baselines (for Step3 ATC)
+                    rms_util.update(util.detach())
+                    rms_risk.update(risk.detach())
+                    rms_u_pi.update(u_pi.detach())
+                    rms_c_alpha.update(conf.detach())
 
                     tau = dynamic_temperature(
                         util=util,
@@ -481,9 +629,12 @@ def train_step2_federated(
                         kappa_p=float(cfg.kappa_p),
                     )
 
-                    # update sigma_v using view-weighted util/risk
+                    # update sigma_v for behavior-feature DP using view-weighted util/risk (sample-level)
                     u_v = (s1.alpha.to(dev) * util.view(-1)).detach()
                     r_v = (s1.alpha.to(dev) * risk.view(-1)).detach()
+                    u_v_sum = u_v_sum + u_v
+                    r_v_sum = r_v_sum + r_v
+                    n_steps += 1
                     sigma_v = dp_sigma(
                         base_sigma=float(cfg.sigma_b0),
                         util=u_v,
@@ -536,6 +687,23 @@ def train_step2_federated(
                     # update running baselines
                     rms_util.update(util.detach())
                     rms_risk.update(risk.detach())
+                    rms_u_pi.update(u_pi.detach())
+                    rms_c_alpha.update(conf.detach())
+
+            # finalize per-view DP noise for the *client update* using client-level averages
+            if n_steps > 0:
+                u_v_mean = (u_v_sum / float(n_steps)).detach()
+                r_v_mean = (r_v_sum / float(n_steps)).detach()
+            else:
+                u_v_mean = torch.zeros((V,), device=dev)
+                r_v_mean = torch.zeros((V,), device=dev)
+            sigma_v_update = dp_sigma(
+                base_sigma=float(cfg.sigma_b0),
+                util=u_v_mean,
+                risk=r_v_mean,
+                sigma_min=float(cfg.sigma_min),
+                sigma_max=float(cfg.sigma_max),
+            ).detach()
 
             # compute delta(s)
             if str(getattr(cfg, "view_grad_mode", "approx")) == "exact" and per_view_delta_acc is not None and per_view_shared_acc is not None:
@@ -563,7 +731,7 @@ def train_step2_federated(
             for v in range(V):
                 dv = v_upds[v]
                 dv_clip = state_dict_clip_by_l2(dv, clip=float(clip_v[v].item()))
-                dv_noisy = state_dict_add_noise(dv_clip, sigma=float(sigma_v[v].item()), clip=float(clip_v[v].item()), device=dev)
+                dv_noisy = state_dict_add_noise(dv_clip, sigma=float(sigma_v_update[v].item()), clip=float(clip_v[v].item()), device=dev)
                 v_dp.append(dv_noisy)
 
             # DP clip + noise on shared update (global)
@@ -576,7 +744,15 @@ def train_step2_federated(
                 merged.update(dv)
             client_deltas.append(merged)
 
-            round_logs.append({"client": float(cid), "loss_mean": float(sum(losses) / max(len(losses), 1))})
+            round_logs.append({
+                "client": float(cid),
+                "loss_mean": float(sum(losses) / max(len(losses), 1)),
+                "clip_v_min": float(clip_v.min().detach().cpu().item()),
+                "clip_v_max": float(clip_v.max().detach().cpu().item()),
+                "sigma_v_min": float(sigma_v_update.min().detach().cpu().item()),
+                "sigma_v_max": float(sigma_v_update.max().detach().cpu().item()),
+                "n_steps": float(n_steps),
+            })
 
         # secure aggregation sum and average
         agg_sum = secure_agg_sum(client_deltas, seed=seed + 9973 * r)
@@ -591,6 +767,42 @@ def train_step2_federated(
 
         logs[f"round_{r}"] = round_logs
 
+    # --- DP accounting (conservative, client-level) ---
+    # view-wise sigma can vary; we take the minimum observed sigma as a worst-case.
+    sigma_view_min = float(cfg.sigma_min)
+    try:
+        all_min = []
+        for r in range(int(cfg.rounds)):
+            for it in logs.get(f"round_{r}", []):
+                if isinstance(it, dict) and "sigma_v_min" in it:
+                    all_min.append(float(it["sigma_v_min"]))
+        if all_min:
+            sigma_view_min = min(all_min)
+    except Exception:
+        pass
+
+    max_samples = max((len(s) for s in shards), default=0)
+    steps_update = int(cfg.rounds)
+    steps_behavior = int(cfg.rounds) * int(cfg.local_epochs) * int(max_samples)
+    dp_delta_total = float(dp_delta)
+    # allocate per-step delta conservatively so advanced composition has slack
+    def _per_step_delta(total: float, steps: int) -> float:
+        if steps <= 0:
+            return total
+        return min(1e-3, total / float(max(2 * steps, 1)))
+
+    # update release (one per round)
+    d_step_u = _per_step_delta(dp_delta_total, steps_update)
+    eps_u = gaussian_mechanism_eps(sigma=min(float(cfg.sigma_b0), sigma_view_min), delta=d_step_u)
+    eps_u_tot = advanced_compose_eps(eps_u, d_step_u, steps_update, dp_delta_total)
+    dp_update = GaussianDPReport(delta=dp_delta_total, steps=steps_update, sigma=min(float(cfg.sigma_b0), sigma_view_min), eps_per_step=eps_u, eps_total=eps_u_tot)
+
+    # behavior release (one per (sample,local-step))
+    d_step_b = _per_step_delta(dp_delta_total, steps_behavior)
+    eps_b = gaussian_mechanism_eps(sigma=min(float(cfg.sigma_b0), sigma_view_min), delta=d_step_b)
+    eps_b_tot = advanced_compose_eps(eps_b, d_step_b, steps_behavior, dp_delta_total)
+    dp_behavior = GaussianDPReport(delta=dp_delta_total, steps=steps_behavior, sigma=min(float(cfg.sigma_b0), sigma_view_min), eps_per_step=eps_b, eps_total=eps_b_tot)
+
     theta_pkg = {
         "cfg2": asdict(cfg),
         "extractor": {"V": V, "Kr": cfg.Kr, "dim": db},
@@ -601,6 +813,14 @@ def train_step2_federated(
         ],
         "util_mean": float(rms_util.mean.detach().cpu().item()) if rms_util.mean is not None else 0.0,
         "risk_mean": float(rms_risk.mean.detach().cpu().item()) if rms_risk.mean is not None else 0.0,
+        "u_pi_mean": float(rms_u_pi.mean.detach().cpu().item()) if rms_u_pi.mean is not None else 0.0,
+        "c_alpha_mean": float(rms_c_alpha.mean.detach().cpu().item()) if rms_c_alpha.mean is not None else 0.0,
+        "dp": {
+            "delta": dp_delta_total,
+            "sigma_view_min": float(sigma_view_min),
+            "update": asdict(dp_update),
+            "behavior": asdict(dp_behavior),
+        },
     }
 
     return theta_pkg, logs

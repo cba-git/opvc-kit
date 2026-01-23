@@ -1,0 +1,109 @@
+{
+  "name": "your_dataset_pipeline",
+  "dataset_cfg": "configs/datasets/<name>.json",
+  "eventlist": {
+    "delta": 60,
+    "T": 120,
+    "t0": null,
+    "max_rows": null,
+    "segment_by_host": 1,
+    "segment_mode": "per_host",
+    "max_records": null,
+    "max_segments_per_host": null
+  },
+  "step1": {
+    "ckpt": null,
+    "model": {
+      "d_in": 256,
+      "d": 64,
+      "da": 32,
+      "Kr": 4,
+      "tau_q": 1.0,
+      "theta": 0.5,
+      "attn_scale": null,
+      "q_norm_momentum": 0.95,
+      "q_norm_eps": 1e-06
+    },
+    "train": {
+      "epochs": 3,
+      "batch_size": 8,
+      "lr": 0.001,
+      "weight_decay": 0.0,
+      "tau_nce": 0.2,
+      "lambda_pi_entropy": 0.0,
+      "lambda_alpha_entropy": 0.0,
+      "grad_clip": 1.0,
+      "seed": 0
+    },
+    "device": "cpu"
+  },
+  "step2": {
+    "model": {
+      "du": 16,
+      "Ka": 1
+    },
+    "train": {
+      "rounds": 1,
+      "num_clients": 2,
+      "local_epochs": 1,
+      "lr": 0.001,
+      "Cb": 1.0,
+      "sigma_b0": 0.5,
+      "dp_delta": 1e-05,
+      "teacher_pt": null,
+      "teacher_batch_size": 64,
+      "teacher_selfsup_epochs": 0,
+      "teacher_selfsup_lr": 0.001,
+      "teacher_selfsup_tau": 0.2,
+      "teacher_selfsup_noise_std": 0.01,
+      "teacher_selfsup_dropout": 0.1,
+      "teacher_selfsup_lambda": 1.0,
+      "teacher_selfsup_sup_lambda": 0.0,
+      "teacher_epochs": 0,
+      "teacher_lr": 0.001,
+      "seed": 0,
+      "clip_min": 0.5,
+      "clip_max": 2.0,
+      "sigma_min": 0.2,
+      "sigma_max": 1.0,
+      "proj_momentum": 0.9,
+      "proj_temp": 1.0,
+      "lambda_asd": 1.0,
+      "lambda_nce": 1.0,
+      "tau_min": 0.1,
+      "tau_max": 1.0,
+      "kappa_u": 1.0,
+      "kappa_p": 1.0,
+      "view_grad_mode": "approx"
+    },
+    "device": "cpu"
+  },
+  "step3": {
+    "ckpt": null,
+    "model": {
+      "ds": 16,
+      "Ka": 1,
+      "beta_det": 1.0,
+      "q_c": 0.95,
+      "tau0_view": 0.0,
+      "lambda_alpha": 1.0,
+      "lambda_sens": 1.0,
+      "lambda_risk": 1.0,
+      "gamma_u": 1.0,
+      "gamma_p": 1.0,
+      "gamma_pi": 1.0,
+      "gamma_alpha": 1.0,
+      "delta": null
+    },
+    "train": {
+      "epochs": 5,
+      "batch_size": 64,
+      "lr": 0.001,
+      "lambda_dac": 1.0,
+      "lambda_decouple": 1.0,
+      "lambda_proto": 1.0,
+      "lambda_det": 0.0
+    },
+    "device": "cpu"
+  }
+}

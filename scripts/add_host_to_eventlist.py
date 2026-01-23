@@ -1,47 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Read eventlist.jsonl, infer a "host" per record, write back with meta.host.
+"""scripts.add_host_to_eventlist
 
-Heuristic (safe default for now):
-- If edges contain strings like 'net:10.20.2.66:5010->...' (either in list edge or dict edge),
-  extract IPv4 candidates and pick the most frequent as host.
-- If no IP found, host='local'.
+Read an eventlist.jsonl and ensure each record contains:
+- meta.host
+- meta.node
+- meta.node_id
+
+This is a *data repair* utility. It does not modify any model logic.
+
+Heuristic (safe default):
+- Count all IPv4 strings inside record["E"] (nested structures allowed).
+- Use the most frequent IP as host; if none is found, fall back to "local".
 
 Usage:
   python3 scripts/add_host_to_eventlist.py --in in.jsonl --out out.jsonl
 """
-import argparse, json, re
-from collections import Counter
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
 from pathlib import Path
 
-IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Make "import opvc" work when running from repo root without installation.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-def iter_edge_strings(e):
-    # edge can be list/tuple (mixed) or dict
-    if isinstance(e, (list, tuple)):
-        for x in e:
-            if isinstance(x, str):
-                yield x
-    elif isinstance(e, dict):
-        for k, v in e.items():
-            if isinstance(v, str):
-                yield v
+from opvc.host import infer_ipv4_from_any
 
-def infer_host_from_record(rec):
-    E = rec.get("E", [])
-    c = Counter()
-    for e in E:
-        for s in iter_edge_strings(e):
-            # prioritize net:* strings but also allow any string containing IP
-            ips = IPV4_RE.findall(s)
-            for ip in ips:
-                c[ip] += 1
-    if c:
-        return c.most_common(1)[0][0]
-    return "local"
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", dest="outp", required=True)
@@ -52,27 +41,40 @@ def main():
     outp.parent.mkdir(parents=True, exist_ok=True)
 
     n = 0
+    last_host = None
+
     with inp.open("r", encoding="utf-8") as fi, outp.open("w", encoding="utf-8") as fo:
         for line in fi:
             line = line.strip()
             if not line:
                 continue
             rec = json.loads(line)
+
             meta = rec.get("meta", {})
             if not isinstance(meta, dict):
                 meta = {}
+            meta = dict(meta)
+
             # set meta.host if missing
             host = meta.get("host")
             if not host:
-                host = infer_host_from_record(rec)
+                host = infer_ipv4_from_any(rec.get("E"), default="local")
                 meta["host"] = host
+
+            # explicit node aliases for downstream label alignment
+            meta.setdefault("node", meta.get("host"))
+            meta.setdefault("node_id", meta.get("node"))
+
             rec["meta"] = meta
             fo.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
             n += 1
+            last_host = host
 
     print(f"[OK] wrote {n} lines -> {outp}")
-    # quick peek
-    print("[OK] sample meta.host:", host)
+    if last_host is not None:
+        print("[OK] sample meta.host:", last_host)
+
 
 if __name__ == "__main__":
     main()

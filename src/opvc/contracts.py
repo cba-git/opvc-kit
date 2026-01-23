@@ -56,7 +56,6 @@ def _assert_prob_simplex(x: Tensor, name: str, atol: float = 1e-3) -> None:
 # =========================
 
 @dataclass
-@dataclass
 class Step1Config:
     # views / windows
     V: int
@@ -152,7 +151,6 @@ class Step1Outputs:
 # Step2
 # =========================
 
-@dataclass
 @dataclass
 class Step2Config:
     # routing subspaces / URAS

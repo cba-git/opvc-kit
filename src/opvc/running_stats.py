@@ -63,3 +63,27 @@ class RunningMeanStd:
         if not self.initialized or self.mean is None or self.var is None:
             return x
         return x * torch.sqrt(self.var + self.eps) + self.mean
+
+    def state_dict(self) -> dict:
+        """Serialize running statistics (CPU tensors)."""
+        return {
+            "dim": int(self.dim),
+            "momentum": float(self.momentum),
+            "eps": float(self.eps),
+            "initialized": bool(self.initialized),
+            "mean": self.mean.detach().cpu() if self.mean is not None else None,
+            "var": self.var.detach().cpu() if self.var is not None else None,
+        }
+
+    def load_state_dict(self, sd: dict, device: Optional[torch.device] = None) -> None:
+        """Load running statistics."""
+        self.dim = int(sd.get("dim", self.dim))
+        self.momentum = float(sd.get("momentum", self.momentum))
+        self.eps = float(sd.get("eps", self.eps))
+        self.initialized = bool(sd.get("initialized", False))
+        m = sd.get("mean", None)
+        v = sd.get("var", None)
+        self.mean = None if m is None else torch.as_tensor(m)
+        self.var = None if v is None else torch.as_tensor(v)
+        if device is not None:
+            self.to(device)

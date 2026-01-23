@@ -1,11 +1,10 @@
 {
   "name": "optc_051_win",
   "format": "csv",
-  "path": "${OPVC_DATA}/optc_051_win.csv",
+  "path": "/home/caa/opvc-lab/archives/optc_051_legacy_20260120_151932/optc_051_win.csv",
   "columns": {
     "ts": "timestamp_rec",
     "op": "operation",
-    "host": null,
     "src_node": "src_node",
     "dst_node": "dst_node",
     "src_index_id": "src_index_id",
@@ -27,7 +26,5 @@
       "entity": "dst_node"
     }
   ],
-  "filters": {
-    "allowed_ops": null
-  }
+  "filters": {}
 }

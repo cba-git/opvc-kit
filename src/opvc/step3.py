@@ -42,6 +42,17 @@ def _load_theta_pkg(theta: Union[str, Dict[str, Any]], device: torch.device) -> 
     return theta
 
 
+def _load_step3_core_ckpt(core_ckpt: Union[str, Dict[str, Any]], device: torch.device) -> Dict[str, Any]:
+    if isinstance(core_ckpt, str):
+        pkg = torch.load(core_ckpt, map_location=device)
+        if not isinstance(pkg, dict):
+            raise TypeError(f"step3_core_ckpt must be a dict, got {type(pkg)}")
+        return pkg
+    if not isinstance(core_ckpt, dict):
+        raise TypeError(f"core_ckpt must be a path or dict, got {type(core_ckpt)}")
+    return core_ckpt
+
+
 def _infer_da_from_state_dict(sd: Dict[str, Tensor]) -> int:
     """Infer da (input aligned dim) from saved student state_dict."""
     # backbone first linear: weight shape [hidden, da]
@@ -88,7 +99,11 @@ class Step3Core(nn.Module):
         self.prototypes = nn.Parameter(torch.randn(cfg3.Ka, cfg3.ds) * 0.01)
 
     def scd(self, U: Tensor) -> Tuple[Tensor, Tensor]:
-        """Return (z_content, z_style) with batch centering."""
+        """Return (z_content, z_style).
+
+        NOTE: We only apply batch centering when batch size > 1.
+        For B==1 (common in inference), centering would collapse z to zeros.
+        """
         if U.ndim == 1:
             Ub = U.view(1, -1)
             squeeze = True
@@ -97,8 +112,10 @@ class Step3Core(nn.Module):
             squeeze = False
         zc = self.W_c(Ub)
         zs = self.W_s(Ub)
-        zc = zc - zc.mean(dim=0, keepdim=True)
-        zs = zs - zs.mean(dim=0, keepdim=True)
+        # Avoid collapse when B==1.
+        if Ub.shape[0] > 1:
+            zc = zc - zc.mean(dim=0, keepdim=True)
+            zs = zs - zs.mean(dim=0, keepdim=True)
         return (zc.squeeze(0), zs.squeeze(0)) if squeeze else (zc, zs)
 
     def detect_score(self, z_style: Tensor) -> Tensor:
@@ -136,6 +153,7 @@ def run_step3(
     theta_pkg: Union[str, Dict[str, Any]],
     sensitivity_coeff: Optional[Sequence[float]] = None,
     benign_scores_for_calibration: Optional[Tensor] = None,
+    core_ckpt: Optional[Union[str, Dict[str, Any]]] = None,
     device: str = "cpu",
 ) -> Step3Outputs:
     """Main Step3 entry."""
@@ -178,6 +196,12 @@ def run_step3(
     # Step3 core model
     core = Step3Core(cfg3).to(dev)
     core.eval()
+    if core_ckpt is not None:
+        ck = _load_step3_core_ckpt(core_ckpt, device=dev)
+        sd = ck.get("state_dict") or ck.get("step3_state_dict")
+        if sd is None:
+            raise ValueError("core_ckpt missing 'state_dict'")
+        core.load_state_dict({k: v.to(dev) for k, v in sd.items()}, strict=True)
 
     # SCD
     z_c, z_s = core.scd(U_s)

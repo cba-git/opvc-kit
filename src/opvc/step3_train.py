@@ -29,6 +29,31 @@ from .contracts import Step3Config
 from .step3 import Step3Core
 from .step3_losses import dac_multilabel_bce_loss, prototype_constraint_loss, scd_decouple_loss
 
+
+def save_step3_core_ckpt(path: str, cfg3: Step3Config, core: Step3Core, extra: dict | None = None) -> None:
+    """Save Step3Core checkpoint for paper-level reproducibility."""
+    payload = {
+        "cfg3": cfg3.__dict__,
+        "state_dict": {k: v.detach().cpu() for k, v in core.state_dict().items()},
+        "extra": extra or {},
+    }
+    import os
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    torch.save(payload, path)
+
+
+def load_step3_core_ckpt(path: str, device: str = "cpu") -> tuple[Step3Config, Step3Core, dict]:
+    """Load Step3Core checkpoint."""
+    dev = torch.device(device)
+    pkg = torch.load(path, map_location=dev)
+    if not isinstance(pkg, dict) or "cfg3" not in pkg or "state_dict" not in pkg:
+        raise TypeError(f"invalid step3 ckpt: {path}")
+    cfg3 = Step3Config(**pkg["cfg3"])  # type: ignore[arg-type]
+    core = Step3Core(cfg3).to(dev)
+    core.load_state_dict({k: v.to(dev) for k, v in pkg["state_dict"].items()}, strict=True)
+    core.eval()
+    return cfg3, core, pkg.get("extra", {})
+
 Tensor = torch.Tensor
 
 

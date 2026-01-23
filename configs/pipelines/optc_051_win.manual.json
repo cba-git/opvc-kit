@@ -1,5 +1,5 @@
 {
-  "name": "optc_051_win_auto",
+  "name": "optc_051_win_manual",
   "dataset_cfg": "configs/datasets/optc_051_win.json",
   "eventlist": {
     "delta": 60,

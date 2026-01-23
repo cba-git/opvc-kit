@@ -43,11 +43,17 @@
 
 ## Step3：检测/识别/定位（窗口级） → 最终输出
 
+> **Ka 的最终口径：**`Ka=1` 为默认二分类（attack vs benign），此时 `y_hat` 的 shape 仍为 `torch.Tensor[Ka]`，即 `torch.Tensor[1]`，可把 `y_hat[0]` 解释为 `P(attack)`；
+> `Ka>1` 时为多标签攻击类型识别（multi-hot），`y_hat[k]` 为第 k 类概率。
+> 检测概率建议以 `p_det` 为准（它显式使用了 `tau_x` 阈值自适应），识别/标签输出以 `y_hat` 为准。
+
+
+
 | Paper 符号 | 含义 | 代码字段 | 代码类型/shape | 备注 |
 |---|---|---|---|---|
 | $p_{det}(x)$ | 检测概率 | `p_det` | `torch.Tensor[]` | scalar |
 | $\tau(x)$ | 自适应阈值 | `tau_x` | `torch.Tensor[]` | scalar |
-| $y(x)$ | 多标签预测 | `y_hat` | `torch.Tensor[Ka]` | |
+| $y(x)$ | 识别输出（默认二分类；可选多标签） | `y_hat` | `torch.Tensor[Ka]` | `Ka=1` 时为二分类；`Ka>1` 为多标签 | |
 | $I_v(x)$ | 视图是否可疑 | `I_view` | `torch.Tensor[V] (bool)` | |
 | $J_v(x)$ | 可疑窗口区间集合 | `J_view` | `list[list[(start,end)]]` | **窗口 τ 级** |
 | flagunk(x) | 未知载体告警 | `flag_unknown` | `torch.Tensor[] (bool)` | 兜底 |

@@ -109,15 +109,21 @@ def main():
     print("[OK] wrote", op)
 
     if args.out_pipeline_cfg:
-        # 默认一套“能跑通 + 可复用”的 pipeline 参数（后续你可以按需要改默认值）
+        # 默认一套“论文口径 + 可复用”的 pipeline 参数（后续你可以按需要改默认值）
         pipe = {
             "name": f"{ds.get('name')}_auto",
             "dataset_cfg": str(Path(args.dataset_cfg)),
             "eventlist": {
                 "delta": int(delta) if abs(delta - int(delta)) < 1e-9 else float(delta),
-                "T": int(T_cover_all),
+                # paper setting: fixed segment length; defaults to 2h if delta=60s
+                "T": int(args.T_fixed_2h),
+                # if provided, this is the global alignment; otherwise build_eventlist can align per-host
                 "t0": int(t0) if abs(t0 - int(t0)) < 1e-9 else float(t0),
                 "max_rows": None,
+                "segment_by_host": True,
+                "segment_mode": "per_host",
+                "max_records": None,
+                "max_segments_per_host": None,
             },
             "step1": {
                 "d_in": 256, "d": 64, "da": 32, "Kr": 4,

@@ -34,7 +34,7 @@
 
 - `name`：数据集名字（用于 meta / 输出文件命名）
 - `format`：目前用 `"csv"`
-- `path`：CSV 文件绝对路径（建议绝对路径）
+- `path`：CSV 文件路径（建议绝对路径；也支持 `${OPVC_DATA}/xxx.csv` 这种环境变量写法，便于代码/数据分离）
 - `columns`：列名映射（至少要有 `ts` 和 `op`）
 - `timestamp.unit`：时间戳单位（`"s" | "ms" | "us" | "ns"`）
 - `views`：每个 view 指定 `name` + `entity`（CSV 中的列名）
@@ -77,6 +77,26 @@
 ```
 
 > 注意：`views[*].entity` 要写 **CSV 里的列名**（不是 `columns` 里映射的 key 名）。
+
+### 4) host / node 字段与样本对齐（强烈建议）
+
+- OPVC 的**样本定义是 `host × 固定时间段`**，因此我们在 `build_eventlist` 阶段会为每条记录写入 `meta.host`，并冗余写入 `meta.node` / `meta.node_id`（三者默认相同）。
+- 你可以在 `configs/datasets/<name>.json` 的 `columns.host` 明确指定 host 列；如果不指定，适配器会优先从 `host/src_node/dst_node/views[*].entity` 等候选列里**自动推断 host**。
+- 这三个 meta 字段用于：训练/验证/推理时对齐外部标签文件、做 debug 与回溯定位。
+
+### 5) 关于 `Ka`（二分类默认，多标签可选）
+
+- `Ka=1`：默认二分类（attack vs benign）。Step3 的 `y_hat` 仍是 `Tensor[Ka]`，即 `Tensor[1]`。
+- `Ka>1`：多标签攻击类型识别（multi-hot）。Step3 的 `y_hat[k]` 为第 k 类概率。
+- 这两个设置都不会影响 Step1；主要影响 Step2 的 teacher 头与 Step3 的分类头。
+
+### 6) （可选）离线教师数据 `teacher_pt` 的格式
+
+- Step2 支持加载一个离线 `.pt` 文件做教师预训练：
+  - **无标签**：仅包含 `b`（行为特征），用于**自监督**预训练；
+  - **有标签**：包含 `b` 与 `y`，其中 `y` 默认二分类（shape `[N,1]`），也支持多标签（shape `[N,Ka]`）。
+- `.pt` 文件推荐格式：`{'b': Tensor[N,db], 'y': Tensor[N,Ka] (optional)}`。
+
 
 ---
 

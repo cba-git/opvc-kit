@@ -40,10 +40,13 @@ def scd_decouple_loss(z_content: Tensor, z_style: Tensor, eps: float = 1e-12) ->
         zs = z_style.view(1, -1)
     else:
         zs = z_style
-    # center
+    # center only when B>1. With B==1, centering collapses to zeros and the
+    # batch covariance estimate is meaningless.
+    if zc.shape[0] <= 1:
+        return torch.zeros((), device=zc.device, dtype=zc.dtype)
     zc = zc - zc.mean(dim=0, keepdim=True)
     zs = zs - zs.mean(dim=0, keepdim=True)
-    B = float(max(zc.shape[0], 1))
+    B = float(zc.shape[0])
     cov = (zc.T @ zs) / (B + eps)  # [ds,ds]
     return (cov ** 2).sum()  # Frobenius norm squared
 

@@ -5,7 +5,6 @@
   "columns": {
     "ts": "timestamp_rec",
     "op": "operation",
-    "host": null,
     "src_node": "src_node",
     "dst_node": "dst_node",
     "src_index_id": "src_index_id",
@@ -27,7 +26,5 @@
       "entity": "dst_node"
     }
   ],
-  "filters": {
-    "allowed_ops": null
-  }
+  "filters": {}
 }
